@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RSA Calculator</title>
+<style>
+  body { font: 16px/1.5 system-ui, sans-serif; max-width: 720px; margin: 0 auto; padding: 16px; color: #222; background: #fff; }
+  h1 { margin-bottom: 0; }
+  fieldset { margin: 20px 0; border: 1px solid #bbb; border-radius: 6px; }
+  legend { font-weight: 600; }
+  label { display: inline-block; margin: 4px 12px 4px 0; }
+  input { font: inherit; padding: 4px 6px; width: 9em; }
+  input[readonly], textarea[readonly] { background: #f1f1f1; }
+  textarea { width: 100%; box-sizing: border-box; font: inherit; }
+  button { font: inherit; padding: 4px 12px; margin: 4px 0; cursor: pointer; }
+  .err { color: #b00020; }
+  @media (prefers-color-scheme: dark) {
+    body { color: #eee; background: #181818; }
+    fieldset { border-color: #555; }
+    input, textarea { background: #262626; color: #eee; border: 1px solid #555; }
+    input[readonly], textarea[readonly] { background: #333; }
+    button { background: #333; color: #eee; border: 1px solid #555; }
+    .err { color: #ff6b81; }
+  }
+</style>
+</head>
+<body>
+<h1>RSA Calculator</h1>
+<p><small>Based on the RSA worksheet by JL Popyack (Drexel). Uses BigInt, so large values work, but factoring is by trial division: keep K below about 15 digits.</small></p>
+
+<fieldset>
+  <legend>Step 1. Compute N as the product of two primes p and q</legend>
+  <label>p <input id="p" inputmode="numeric" value="61"></label>
+  <label>q <input id="q" inputmode="numeric" value="53"></label><br>
+  <button id="b1">Compute N and r</button>
+  <p>
+    <label>N = p·q <input id="N" readonly></label>
+    <label>r = (p−1)(q−1) <input id="r" readonly></label>
+  </p>
+  <label for="cand">Candidates (1 mod r), i.e. k·r + 1:</label>
+  <textarea id="cand" rows="3" readonly></textarea>
+</fieldset>
+
+<fieldset>
+  <legend>Step 2. Find a number equal to 1 mod r which can be factored</legend>
+  <label>K <input id="K" inputmode="numeric"></label>
+  <button id="b2">Factor K</button><br>
+  <label for="fac">Factors of K:</label>
+  <input id="fac" readonly style="width:100%;box-sizing:border-box">
+</fieldset>
+
+<fieldset>
+  <legend>Step 3. Choose e and d with e·d ≡ 1 (mod r)</legend>
+  <p>Split the factors of K into two numbers e and d, then check.</p>
+  <label>e <input id="e" inputmode="numeric"></label>
+  <label>d <input id="d" inputmode="numeric"></label>
+  <button id="b3">Check</button>
+  <button id="auto">Pick e and d for me</button><br>
+  <label for="chk">Consistency check:</label>
+  <textarea id="chk" rows="4" readonly></textarea>
+</fieldset>
+
+<fieldset>
+  <legend>Step 4. Encode and decode messages</legend>
+  <p>Enter a message in numeric form (e.g. ASCII codes). Each chunk must be smaller than N.</p>
+  <label>Msg <input id="msg" inputmode="numeric"></label>
+  <button id="b4">Encode / Decode</button>
+  <p>
+    <label>Encrypted: Cipher = Msg<sup>e</sup> mod N <input id="cipher" readonly></label><br>
+    <label>Decrypted: Msg = Cipher<sup>d</sup> mod N <input id="plain" readonly></label>
+  </p>
+  <p id="err4" class="err"></p>
+</fieldset>
+
+<h2>Diffie-Hellman Key Exchange</h2>
+<fieldset>
+  <legend>Agree on a shared secret over a public channel</legend>
+  <p>Alice and Bob publicly agree on a prime P and a base G. Each keeps a private number, and they swap only the public values.</p>
+  <label>P (prime) <input id="dp" inputmode="numeric" value="23"></label>
+  <label>G (base) <input id="dg" inputmode="numeric" value="5"></label><br>
+  <label>Alice private a <input id="da" inputmode="numeric" value="6"></label>
+  <label>Bob private b <input id="db" inputmode="numeric" value="15"></label><br>
+  <button id="b5">Exchange keys</button>
+  <p>
+    <b>One person only:</b> use just P, G and your private number (Alice's a), plus the public value you received.<br>
+    <label>Received public value B <input id="dr" inputmode="numeric"></label>
+    <button id="b6">Compute my side</button>
+  </p>
+  <p>
+    <label>Alice sends A = G<sup>a</sup> mod P <input id="dA" readonly></label>
+    <label>Bob sends B = G<sup>b</sup> mod P <input id="dB" readonly></label><br>
+    <label>Alice computes B<sup>a</sup> mod P <input id="sA" readonly></label>
+    <label>Bob computes A<sup>b</sup> mod P <input id="sB" readonly></label>
+  </p>
+  <p id="dhres"></p>
+  <p id="err5" class="err"></p>
+</fieldset>
+
+<script>
+const $ = id => document.getElementById(id);
+const big = id => { const s = $(id).value.trim(); if (!/^\d+$/.test(s)) throw new Error(id + " must be a positive integer"); return BigInt(s); };
+const gcd = (a, b) => { while (b) [a, b] = [b, a % b]; return a; };
+function powmod(b, e, m) {
+  let r = 1n; b %= m;
+  for (; e > 0n; e >>= 1n) { if (e & 1n) r = r * b % m; b = b * b % m; }
+  return r;
+}
+function factor(n) {
+  const out = [];
+  for (let f = 2n; f * f <= n; f += f === 2n ? 1n : 2n) while (n % f === 0n) { out.push(f); n /= f; }
+  if (n > 1n) out.push(n);
+  return out;
+}
+const isPrime = n => n > 1n && factor(n).length === 1;
+const run = (fn, errId) => () => { try { fn(); if (errId) $(errId).textContent = ""; } catch (x) { if (errId) $(errId).textContent = x.message; else alert(x.message); } };
+
+$("b1").onclick = run(() => {
+  const p = big("p"), q = big("q");
+  if (!isPrime(p) || !isPrime(q)) throw new Error("p and q must both be prime");
+  if (p === q) throw new Error("p and q must differ");
+  const r = (p - 1n) * (q - 1n);
+  $("N").value = p * q; $("r").value = r;
+  // composite candidates only: a prime K can only factor as 1 * K
+  const c = [];
+  for (let k = 1n; c.length < 12 && k < 100000n; k++) if (!isPrime(k * r + 1n)) c.push(k * r + 1n);
+  $("cand").value = c.join(", ");
+});
+
+$("b2").onclick = run(() => {
+  const K = big("K");
+  $("fac").value = K < 2n ? "" : factor(K).join(" × ") + (isPrime(K) ? "  (prime: pick another K)" : "");
+});
+
+$("b3").onclick = run(() => {
+  const r = big("r"), e = big("e"), d = big("d");
+  const lines = [`e·d mod r = ${e * d % r}` + (e * d % r === 1n ? "" : "  (should be 1)")];
+  lines.push(gcd(e, r) === 1n ? "e and r are relatively prime" : "e and r are NOT relatively prime");
+  lines.push(gcd(d, r) === 1n ? "d and r are relatively prime" : "d and r are NOT relatively prime");
+  $("chk").value = lines.join("\n");
+});
+
+$("auto").onclick = run(() => {
+  const r = big("r");
+  let e = 3n;
+  while (e < r && gcd(e, r) !== 1n) e += 2n;
+  if (e >= r) throw new Error("r is too small to have a usable e; choose larger primes");
+  // extended Euclid: find d with e*d ≡ 1 (mod r)
+  let [a, b, x, y] = [e, r, 1n, 0n];
+  while (b) { const t = a / b; [a, b] = [b, a - t * b]; [x, y] = [y, x - t * y]; }
+  $("e").value = e; $("d").value = ((x % r) + r) % r;
+  $("b3").click();
+});
+
+$("b5").onclick = run(() => {
+  const P = big("dp"), G = big("dg"), a = big("da"), b = big("db");
+  if (!isPrime(P) || P < 5n) throw new Error("P must be a prime of at least 5");
+  if (G < 2n || G > P - 2n) throw new Error("G must be between 2 and P-2");
+  if (a < 1n || a > P - 2n || b < 1n || b > P - 2n) throw new Error("a and b must be between 1 and P-2");
+  const A = powmod(G, a, P), B = powmod(G, b, P), sa = powmod(B, a, P), sb = powmod(A, b, P);
+  $("dA").value = A; $("dB").value = B; $("sA").value = sa; $("sB").value = sb;
+  $("dhres").textContent = sa === sb ? "Shared secret = " + sa : "Secrets differ (unexpected)";
+}, "err5");
+
+$("b6").onclick = run(() => {
+  const P = big("dp"), G = big("dg"), a = big("da"), B = big("dr");
+  if (!isPrime(P) || P < 5n) throw new Error("P must be a prime of at least 5");
+  if (G < 2n || G > P - 2n) throw new Error("G must be between 2 and P-2");
+  if (a < 1n || a > P - 2n) throw new Error("a must be between 1 and P-2");
+  if (B < 2n || B > P - 2n) throw new Error("Received value must be between 2 and P-2");
+  $("dA").value = powmod(G, a, P); $("dB").value = B; $("sA").value = powmod(B, a, P); $("sB").value = "";
+  $("dhres").textContent = "Send A to the other person. Shared secret = " + $("sA").value;
+}, "err5");
+
+$("b4").onclick = run(() => {
+  const N = big("N"), e = big("e"), d = big("d"), m = big("msg");
+  if (m >= N) throw new Error("Msg must be smaller than N; break it into smaller chunks");
+  const c = powmod(m, e, N);
+  $("cipher").value = c; $("plain").value = powmod(c, d, N);
+}, "err4");
+</script>
+</body>
+</html>
